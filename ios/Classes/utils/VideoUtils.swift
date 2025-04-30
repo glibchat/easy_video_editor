@@ -647,12 +647,13 @@ class VideoUtils {
         instruction.timeRange = CMTimeRange(start: .zero, duration: asset.duration)
         
         let transformer = AVMutableVideoCompositionLayerInstruction(assetTrack: compositionVideoTrack)
-        
-        // Calculate scale to fit target height
+        let transform = videoTrack.preferredTransform
+
+        // Combine scale and existing transform ONLY if needed
         let scaleFactor = CGFloat(targetHeight) / abs(originalSize.height)
-        let scale = CGAffineTransform(scaleX: scaleFactor, y: scaleFactor)
-        
-        transformer.setTransform(scale, at: .zero)
+        let scaledTransform = transform.concatenating(CGAffineTransform(scaleX: scaleFactor, y: scaleFactor))
+
+        transformer.setTransform(scaledTransform, at: .zero)
         instruction.layerInstructions = [transformer]
         videoComposition.instructions = [instruction]
         
