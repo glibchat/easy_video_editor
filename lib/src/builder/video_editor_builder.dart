@@ -91,6 +91,17 @@ class VideoEditorBuilder {
     return this;
   }
 
+  /// Adds flip operation
+  ///
+  /// [flipDirection] Direction to flip the video (horizontal or vertical)
+  VideoEditorBuilder flip({required FlipDirection flipDirection}) {
+    _operations.add(VideoOperation(
+      VideoOperationType.flip,
+      {'flipDirection': flipDirection},
+    ));
+    return this;
+  }
+
   /// Executes all operations in sequence and returns the final video path
   ///
   /// [outputPath] Optional path where the final video will be saved.
@@ -228,6 +239,12 @@ class VideoEditorBuilder {
           inputPath,
           resolution: operation.params['resolution'] as VideoResolution,
         );
+
+      case VideoOperationType.flip:
+        return await _editor.flipVideo(
+          inputPath,
+          operation.params['flipDirection'] as FlipDirection,
+        );
     }
   }
 
@@ -315,6 +332,7 @@ class VideoEditorBuilder {
   /// - Author (if available)
   /// - Orientation (rotation in degrees: 0, 90, 180, 270)
   /// - File size (in bytes)
+  /// - Creation date (in String)
   Future<VideoMetadata> getVideoMetadata() async {
     return await EasyVideoEditor.getVideoMetadata(_videoPath);
   }

@@ -26,6 +26,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import androidx.core.graphics.scale
+import androidx.media3.common.Effect
 
 @UnstableApi
 class VideoUtils {
@@ -58,7 +59,10 @@ class VideoUtils {
                     
                     // Get rotation
                     val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toInt() ?: 0
-                    
+
+                    // Get date
+                    val date = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE)
+
                     // Get file size
                     val fileSize = videoFile.length()
                     
@@ -69,7 +73,8 @@ class VideoUtils {
                         title = title,
                         author = author,
                         rotation = rotation,
-                        fileSize = fileSize
+                        fileSize = fileSize,
+                        date = date
                     )
                 } finally {
                     retriever.release()
@@ -82,11 +87,9 @@ class VideoUtils {
             context: Context,
             videoPath: String,
             targetHeight: Int = 720, // Default to 720p
-            bitrateMultiplier: Float = 0.5f // Reduce bitrate to 50% of original by default
         ): String {
             withContext(Dispatchers.IO) {
                 require(File(videoPath).exists()) { "Input video file does not exist" }
-                require(bitrateMultiplier in 0.1f..1.0f) { "Bitrate multiplier must be between 0.1 and 1.0" }
                 require(targetHeight > 0) { "Target height must be positive" }
             }
 
@@ -151,8 +154,7 @@ class VideoUtils {
                                 // Send progress updates more frequently
                                 // Always report progress as long as we have a valid progress value
                                 if (progressHolder.progress >= 0) {
-                                    // Log every progress update from Media3
-                                    android.util.Log.d("VideoUtils", "Media3 reported progress: ${progressHolder.progress}%")
+                                    // Report progress to ProgressManager
                                     ProgressManager.getInstance().reportProgress(progressHolder.progress / 100.0)
                                 }
                                 
@@ -250,8 +252,7 @@ class VideoUtils {
                                 // Send progress updates more frequently
                                 // Always report progress as long as we have a valid progress value
                                 if (progressHolder.progress >= 0) {
-                                    // Log every progress update from Media3
-                                    android.util.Log.d("VideoUtils", "Media3 reported progress: ${progressHolder.progress}%")
+                                    // Report progress to ProgressManager
                                     ProgressManager.getInstance().reportProgress(progressHolder.progress / 100.0)
                                 }
                                 
@@ -350,8 +351,7 @@ class VideoUtils {
                                 // Send progress updates more frequently
                                 // Always report progress as long as we have a valid progress value
                                 if (progressHolder.progress >= 0) {
-                                    // Log every progress update from Media3
-                                    android.util.Log.d("VideoUtils", "Media3 reported progress: ${progressHolder.progress}%")
+                                    // Report progress to ProgressManager
                                     ProgressManager.getInstance().reportProgress(progressHolder.progress / 100.0)
                                 }
                                 
@@ -439,8 +439,7 @@ class VideoUtils {
                                 // Send progress updates more frequently
                                 // Always report progress as long as we have a valid progress value
                                 if (progressHolder.progress >= 0) {
-                                    // Log every progress update from Media3
-                                    android.util.Log.d("VideoUtils", "Media3 reported progress: ${progressHolder.progress}%")
+                                    // Report progress to ProgressManager
                                     ProgressManager.getInstance().reportProgress(progressHolder.progress / 100.0)
                                 }
                                 
@@ -535,8 +534,7 @@ class VideoUtils {
                                 // Send progress updates more frequently
                                 // Always report progress as long as we have a valid progress value
                                 if (progressHolder.progress >= 0) {
-                                    // Log every progress update from Media3
-                                    android.util.Log.d("VideoUtils", "Media3 reported progress: ${progressHolder.progress}%")
+                                    // Report progress to ProgressManager
                                     ProgressManager.getInstance().reportProgress(progressHolder.progress / 100.0)
                                 }
                                 
@@ -624,8 +622,7 @@ class VideoUtils {
                                 // Send progress updates more frequently
                                 // Always report progress as long as we have a valid progress value
                                 if (progressHolder.progress >= 0) {
-                                    // Log every progress update from Media3
-                                    android.util.Log.d("VideoUtils", "Media3 reported progress: ${progressHolder.progress}%")
+                                    // Report progress to ProgressManager
                                     ProgressManager.getInstance().reportProgress(progressHolder.progress / 100.0)
                                 }
                                 
@@ -756,8 +753,7 @@ class VideoUtils {
                                 // Send progress updates more frequently
                                 // Always report progress as long as we have a valid progress value
                                 if (progressHolder.progress >= 0) {
-                                    // Log every progress update from Media3
-                                    android.util.Log.d("VideoUtils", "Media3 reported progress: ${progressHolder.progress}%")
+                                    // Report progress to ProgressManager
                                     ProgressManager.getInstance().reportProgress(progressHolder.progress / 100.0)
                                 }
                                 
@@ -854,8 +850,7 @@ class VideoUtils {
                                 // Send progress updates more frequently
                                 // Always report progress as long as we have a valid progress value
                                 if (progressHolder.progress >= 0) {
-                                    // Log every progress update from Media3
-                                    android.util.Log.d("VideoUtils", "Media3 reported progress: ${progressHolder.progress}%")
+                                    // Report progress to ProgressManager
                                     ProgressManager.getInstance().reportProgress(progressHolder.progress / 100.0)
                                 }
                                 
@@ -932,6 +927,109 @@ class VideoUtils {
                     retriever.release()
                 }
             }
+
+        suspend fun flipVideo(context: Context, videoPath: String, flipDirection: String): String {
+            // File operations on IO thread
+            withContext(Dispatchers.IO) {
+                require(File(videoPath).exists()) { "Input video file does not exist" }
+                require(flipDirection.isNotEmpty()) { "Direction must not empty" }
+            }
+
+            val outputFile = withContext(Dispatchers.IO) {
+                File(context.cacheDir, "flip_video_${System.currentTimeMillis()}.mp4")
+                    .apply { if (exists()) delete() }
+            }
+
+            // Transformer operations on Main thread
+            return withContext(Dispatchers.Main) {
+                suspendCancellableCoroutine { continuation ->
+                    val mediaItem =
+                        MediaItem.Builder().setUri(Uri.fromFile(File(videoPath))).build()
+
+                    val flipEffect = when (flipDirection.lowercase()) {
+                        "horizontal" -> ScaleAndRotateTransformation.Builder().setScale(-1f, 1f).build()
+                        "vertical" -> ScaleAndRotateTransformation.Builder().setScale(1f, -1f).build()
+                        else -> ScaleAndRotateTransformation.Builder().setScale(1f, 1f).build()
+                    }
+
+                    val effects =
+                        Effects(
+                            emptyList(),
+                            listOf(
+                                flipEffect
+                            )
+                        )
+
+                    val editedMediaItem =
+                        EditedMediaItem.Builder(mediaItem).setEffects(effects).build()
+
+                    val transformer =
+                        Transformer.Builder(context)
+                            .addListener(
+                                object : Transformer.Listener {
+                                    override fun onCompleted(
+                                        composition: Composition,
+                                        exportResult: ExportResult
+                                    ) {
+                                        if (continuation.isActive) {
+                                            continuation.resume(outputFile.absolutePath)
+                                        }
+                                    }
+
+                                    override fun onError(
+                                        composition: Composition,
+                                        exportResult: ExportResult,
+                                        exportException: ExportException
+                                    ) {
+                                        if (continuation.isActive) {
+                                            continuation.resumeWithException(
+                                                VideoException(
+                                                    "Failed to rotate video: ${exportException.message}",
+                                                    exportException
+                                                )
+                                            )
+                                        }
+                                        outputFile.delete()
+                                    }
+                                }
+                            )
+                            .build()
+
+                    transformer.start(editedMediaItem, outputFile.absolutePath)
+
+                    // Set up progress tracking
+                    val progressHolder = androidx.media3.transformer.ProgressHolder()
+                    val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+                    mainHandler.post(
+                        object : Runnable {
+                            override fun run() {
+                                val progressState = transformer.getProgress(progressHolder)
+                                // Report progress to ProgressManager
+                                // Send progress updates more frequently
+                                // Always report progress as long as we have a valid progress value
+                                if (progressHolder.progress >= 0) {
+                                    // Report progress to ProgressManager
+                                    ProgressManager.getInstance().reportProgress(progressHolder.progress / 100.0)
+                                }
+
+                                // Continue polling if the transformer has started (simplified condition)
+                                // The original Media3 example uses this condition, which might be more reliable
+                                if (progressState != Transformer.PROGRESS_STATE_NOT_STARTED) {
+                                    mainHandler.postDelayed(this, 200) // Update every 200ms - better balance
+                                }
+                            }
+                        }
+                    )
+
+                    continuation.invokeOnCancellation {
+                        if (transformer.getProgress(progressHolder) != Transformer.PROGRESS_STATE_NOT_STARTED) {
+                            transformer.cancel()
+                            outputFile.delete()
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -950,5 +1048,6 @@ data class VideoMetadata(
     val title: String?,
     val author: String?,
     val rotation: Int, // 0, 90, 180, or 270 degrees
-    val fileSize: Long // in bytes
+    val fileSize: Long, // in bytes
+    val date: String?
 )

@@ -1,3 +1,17 @@
+## 0.0.8
+
+- Add flip video method
+
+## 0.0.7
+
+- Fix rotation issue
+
+## 0.0.6
+
+- Add creationDate to getVideoMetadata output
+- Fix rotation issue
+- Downgrade media3 version support SDK 34
+
 ## 0.0.5
 
 - Add Progress callback when export video

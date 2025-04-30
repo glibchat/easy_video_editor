@@ -329,89 +329,156 @@ class VideoUtils {
         guard rotationDegrees.truncatingRemainder(dividingBy: 90) == 0 else {
             throw VideoError.invalidParameters
         }
-        
+
         let asset = AVAsset(url: URL(fileURLWithPath: videoPath))
         let composition = AVMutableComposition()
         let videoComposition = AVMutableVideoComposition()
-        
-        guard let videoTrack = asset.tracks(withMediaType: .video).first,
-              let audioTrack = asset.tracks(withMediaType: .audio).first,
-              let compositionVideoTrack = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid),
-              let compositionAudioTrack = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else {
-            throw VideoError.exportFailed("Failed to get tracks")
+
+        guard let videoTrack = asset.tracks(withMediaType: .video).first else {
+            throw VideoError.exportFailed("No video track found")
         }
-        
+
+        // Add video track to composition
+        guard let compositionVideoTrack = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else {
+            throw VideoError.exportFailed("Failed to create composition track")
+        }
         try compositionVideoTrack.insertTimeRange(
             CMTimeRange(start: .zero, duration: asset.duration),
             of: videoTrack,
             at: .zero
         )
-        try compositionAudioTrack.insertTimeRange(
-            CMTimeRange(start: .zero, duration: asset.duration),
-            of: audioTrack,
-            at: .zero
-        )
-        
-        // Get the original video track info
-        let originalSize = videoTrack.naturalSize
-        let originalTransform = videoTrack.preferredTransform
-        
-        // Calculate the actual display size
-        let videoFrame = originalSize.applying(originalTransform)
-        let actualSize = CGSize(width: abs(videoFrame.width), height: abs(videoFrame.height))
-        
-        // Get the natural size of the video
-        let naturalSize = videoTrack.naturalSize
-        
-        // Calculate dimensions for rotation
-        let isPortrait = abs(rotationDegrees.truncatingRemainder(dividingBy: 180)) == 90
-        let finalSize = isPortrait ? 
-            CGSize(width: naturalSize.height, height: naturalSize.width) :
-            naturalSize
-        
-        // Set the render size
-        videoComposition.renderSize = finalSize
-        
-        // Calculate transform based on rotation
-        var transform = CGAffineTransform.identity
-        
-        // Apply rotation transform
-        switch Int(rotationDegrees) {
-        case 90:
-            // For 90-degree clockwise rotation
-            transform = transform
-                .translatedBy(x: naturalSize.height, y: 0)
-                .rotated(by: .pi / 2)
-        case -90, 270:
-            // For 90-degree counter-clockwise rotation
-            transform = transform
-                .translatedBy(x: 0, y: naturalSize.width)
-                .rotated(by: -.pi / 2)
-        case 180:
-            // For 180-degree rotation
-            transform = transform
-                .translatedBy(x: naturalSize.width, y: naturalSize.height)
-                .rotated(by: .pi)
-        default:
-            break
+
+        // Add audio track if present
+        if let audioTrack = asset.tracks(withMediaType: .audio).first,
+           let compositionAudioTrack = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) {
+            try compositionAudioTrack.insertTimeRange(
+                CMTimeRange(start: .zero, duration: asset.duration),
+                of: audioTrack,
+                at: .zero
+            )
         }
+
+        // Get size and transform
+        let naturalSize = videoTrack.naturalSize
+        let originalTransform = videoTrack.preferredTransform
+
+        // Determine final render size and transform
+        let radians = CGFloat(rotationDegrees) * .pi / 180
         
+        // Combine the track's preferred transform with the additional rotation
+        var transform = originalTransform.concatenating(CGAffineTransform(rotationAngle: radians))
+        
+        // After rotation the video frame might be shifted out of origin (0,0). Calculate
+        // the bounding box of the rotated frame so we can translate it back so that the
+        // top-left of the video is at (0,0) and the content fully fits the renderSize.
+        let originalRect = CGRect(origin: .zero, size: naturalSize)
+        let rotatedRect = originalRect.applying(transform)
+        
+        // The bounding box can have negative origin values. Translate in by the negative
+        // origin to move the video into the positive quadrant.
+        transform = transform.concatenating(CGAffineTransform(translationX: -rotatedRect.origin.x,
+                                                             y: -rotatedRect.origin.y))
+        
+        // Set the final render size based on the absolute rotated bounding box width/height
+        let finalSize = CGSize(width: abs(rotatedRect.width), height: abs(rotatedRect.height))
+        videoComposition.renderSize = finalSize
+
+        // Set up video composition parameters
         videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
-        
+        videoComposition.renderScale = 1.0
+
         let instruction = AVMutableVideoCompositionInstruction()
         instruction.timeRange = CMTimeRange(start: .zero, duration: asset.duration)
-        
+
         let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: compositionVideoTrack)
         layerInstruction.setTransform(transform, at: .zero)
-        
+
         instruction.layerInstructions = [layerInstruction]
         videoComposition.instructions = [instruction]
-        
-        // Ensure proper rendering
-        videoComposition.renderScale = 1.0
-        
+
         let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent("rotated_video_\(Date().timeIntervalSince1970).mp4")
-        
+
+        return try export(composition: composition, outputURL: outputURL, videoComposition: videoComposition, workItem: workItem)
+    }
+    
+    // MARK: - Flip Video
+    static func flipVideo(videoPath: String, flipDirection: String, workItem: DispatchWorkItem? = nil) throws -> String {
+        // Validate input parameters
+        guard FileManager.default.fileExists(atPath: videoPath) else {
+            throw VideoError.fileNotFound
+        }
+        let direction = flipDirection.lowercased()
+        guard direction == "horizontal" || direction == "vertical" else {
+            throw VideoError.invalidParameters
+        }
+
+        let asset = AVAsset(url: URL(fileURLWithPath: videoPath))
+        guard let videoTrack = asset.tracks(withMediaType: .video).first else {
+            throw VideoError.invalidAsset
+        }
+
+        // Create composition and insert video track
+        let composition = AVMutableComposition()
+        guard let compositionVideoTrack = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else {
+            throw VideoError.exportFailed("Failed to create composition video track")
+        }
+        try compositionVideoTrack.insertTimeRange(
+            CMTimeRange(start: .zero, duration: asset.duration),
+            of: videoTrack,
+            at: .zero
+        )
+
+        // Add audio track if present
+        if let audioTrack = asset.tracks(withMediaType: .audio).first,
+           let compositionAudioTrack = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) {
+            try compositionAudioTrack.insertTimeRange(
+                CMTimeRange(start: .zero, duration: asset.duration),
+                of: audioTrack,
+                at: .zero
+            )
+        }
+
+        // Prepare video composition with flip transform
+        let videoComposition = AVMutableVideoComposition()
+        videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
+
+        let instruction = AVMutableVideoCompositionInstruction()
+        instruction.timeRange = CMTimeRange(start: .zero, duration: asset.duration)
+
+        let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: compositionVideoTrack)
+
+        let naturalSize = videoTrack.naturalSize
+        let originalTransform = videoTrack.preferredTransform
+
+        // Build flip transform
+        let flipTransform = direction == "horizontal"
+            ? CGAffineTransform(scaleX: -1, y: 1)
+            : CGAffineTransform(scaleX: 1, y: -1)
+
+        // Combine original transform with flip
+        var transform = originalTransform.concatenating(flipTransform)
+
+        // Calculate bounding box after transform
+        let originalRect = CGRect(origin: .zero, size: naturalSize)
+        let flippedRect = originalRect.applying(transform)
+
+        // Translate to ensure video fits the render size
+        transform = transform.concatenating(
+            CGAffineTransform(translationX: -flippedRect.origin.x,
+                              y: -flippedRect.origin.y)
+        )
+
+        // Final render size
+        videoComposition.renderSize = CGSize(width: abs(flippedRect.width),
+                                             height: abs(flippedRect.height))
+
+        layerInstruction.setTransform(transform, at: .zero)
+        instruction.layerInstructions = [layerInstruction]
+        videoComposition.instructions = [instruction]
+
+        // Output path
+        let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent("flipped_video_\(Date().timeIntervalSince1970).mp4")
+
         return try export(composition: composition, outputURL: outputURL, videoComposition: videoComposition, workItem: workItem)
     }
     
@@ -615,24 +682,24 @@ class VideoUtils {
         guard FileManager.default.fileExists(atPath: videoPath) else {
             throw VideoError.fileNotFound
         }
-        
+
         let url = URL(fileURLWithPath: videoPath)
         let asset = AVAsset(url: url)
-        
+
         // Load required properties asynchronously
         let durationMs = Int64(asset.duration.seconds * 1000)
-        
+
         // Get video track for dimensions and orientation
         guard let videoTrack = asset.tracks(withMediaType: .video).first else {
             throw VideoError.invalidAsset
         }
-        
+
         let naturalSize = videoTrack.naturalSize
-        
+
         // Get transform for rotation
         let transform = videoTrack.preferredTransform
         let rotation: Int
-        
+
         // Determine rotation from transform matrix
         if transform.a == 0 && transform.b == 1.0 && transform.c == -1.0 && transform.d == 0 {
             rotation = 90
@@ -643,22 +710,29 @@ class VideoUtils {
         } else {
             rotation = 0
         }
-        
-        // Get file size
+
+        // Get file attributes for size and creation date
         let fileSize: Int64
+        var creationDateString: String? = nil
+
         do {
             let attributes = try FileManager.default.attributesOfItem(atPath: videoPath)
             fileSize = attributes[.size] as? Int64 ?? 0
+
+            if let creationDate = attributes[.creationDate] as? Date {
+                let formatter = ISO8601DateFormatter()
+                creationDateString = formatter.string(from: creationDate)
+            }
         } catch {
             fileSize = 0
+            creationDateString = nil
         }
-        
+
         // Get metadata items for title and author
         let metadata = asset.commonMetadata
-        
         var title: String? = nil
         var author: String? = nil
-        
+
         for item in metadata {
             if item.commonKey?.rawValue == "title" {
                 title = item.stringValue
@@ -666,7 +740,7 @@ class VideoUtils {
                 author = item.stringValue
             }
         }
-        
+
         // Build metadata dictionary
         return [
             "duration": durationMs,
@@ -675,9 +749,11 @@ class VideoUtils {
             "title": title as Any,
             "author": author as Any,
             "rotation": rotation,
-            "fileSize": fileSize
+            "fileSize": fileSize,
+            "date": creationDateString as Any
         ]
     }
+
     
     // MARK: - Generate Thumbnail
     static func generateThumbnail(videoPath: String, positionMs: Int64, width: Int? = nil, height: Int? = nil, quality: Int = 80, workItem: DispatchWorkItem? = nil) throws -> String {

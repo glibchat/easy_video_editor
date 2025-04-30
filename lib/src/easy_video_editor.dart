@@ -104,7 +104,13 @@ class EasyVideoEditor {
   /// - Author (if available)
   /// - Orientation (rotation in degrees: 0, 90, 180, 270)
   /// - File size (in bytes)
+  /// - Creation date (in String)
   static Future<VideoMetadata> getVideoMetadata(String videoPath) {
     return EasyVideoEditorPlatform.instance.getVideoMetadata(videoPath);
+  }
+
+  /// Flips a video horizontally or vertically.
+  Future<String?> flipVideo(String videoPath, FlipDirection flipDirection) {
+    return EasyVideoEditorPlatform.instance.flipVideo(videoPath, flipDirection);
   }
 }
