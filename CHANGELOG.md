@@ -1,6 +1,7 @@
 ## 0.0.8
 
 - Add flip video method
+- Add Swift Package Manager (SPM) support for iOS, alongside existing CocoaPods support
 
 ## 0.0.7
 
